@@ -19,11 +19,10 @@ from dataset import hierarchical_dataset, AlignCollate
 from model import Model
 
 PROFILER_ACTIVITIES_LIST = [ProfilerActivity.CPU]
-PROFILER_WAIT_STEPS = 1
-PROFILER_WARMUP_STEPS = 2
-PROFILER_ACTIVE_STEPS = 5
+PROFILER_WAIT_STEPS = 5
+PROFILER_WARMUP_STEPS = 20
+PROFILER_ACTIVE_STEPS = 50
 PROFILER_REPEAT_CYCLES = 1
-PROFILER_SUMMARY_MAX_ROWS = 50
 
 device = 'cpu'
 if torch.cuda.is_available():
@@ -241,7 +240,7 @@ def validation(model, criterion, evaluation_loader, converter, opt):
             by='self_cpu_time_total_us',
             ascending=False,
             na_position='last'
-        ).head(PROFILER_SUMMARY_MAX_ROWS)
+        )
         df.to_csv(f'./result/{opt.exp_name}/profile_summary.csv', index=False)
 
     if device == 'cuda':
