@@ -3,6 +3,7 @@ import time
 import string
 import argparse
 import re
+import json
 
 import pandas as pd
 import torch
@@ -28,6 +29,11 @@ device = 'cpu'
 if torch.cuda.is_available():
     device = 'cuda'
     PROFILER_ACTIVITIES_LIST += [ProfilerActivity.CUDA]
+
+
+def _synchronize_if_needed():
+    if device == 'cuda':
+        torch.cuda.synchronize()
 
 
 def benchmark_all_eval(model, criterion, converter, opt, calculate_infer_time=False):
@@ -98,6 +104,11 @@ def validation(model, criterion, evaluation_loader, converter, opt):
     length_of_data = 0
     infer_time = 0
     valid_loss_avg = Averager()
+    peak_allocated_mb = None
+    peak_reserved_mb = None
+
+    if device == 'cuda':
+        torch.cuda.reset_peak_memory_stats()
 
     with profile(
         activities=PROFILER_ACTIVITIES_LIST,
@@ -118,9 +129,11 @@ def validation(model, criterion, evaluation_loader, converter, opt):
 
             text_for_loss, length_for_loss = converter.encode(labels, batch_max_length=opt.batch_max_length)
 
+            _synchronize_if_needed()
             start_time = time.time()
             if 'CTC' in opt.Prediction:
                 preds = model(image, text_for_pred)
+                _synchronize_if_needed()
                 forward_time = time.time() - start_time
 
                 # Calculate evaluation loss for CTC deocder.
@@ -141,6 +154,7 @@ def validation(model, criterion, evaluation_loader, converter, opt):
             
             else:
                 preds = model(image, text_for_pred, is_train=False)
+                _synchronize_if_needed()
                 forward_time = time.time() - start_time
 
                 preds = preds[:, :text_for_loss.shape[1] - 1, :]
@@ -202,13 +216,59 @@ def validation(model, criterion, evaluation_loader, converter, opt):
                     confidence_score = 0  # for empty pred case, when prune after "end of sentence" token ([s])
                 confidence_score_list.append(confidence_score)
                 # print(pred, gt, pred==gt, confidence_score)
-                prof.step()
+
+            prof.step()
         
         prof.export_chrome_trace(f'./result/{opt.exp_name}/profile_trace.json')
         prof_results = prof.key_averages()
-        df = pd.DataFrame(map(vars, prof_results))
+        rows = []
+        for event in prof_results:
+            rows.append({
+                'key': event.key,
+                'self_cpu_time_total_us': getattr(event, 'self_cpu_time_total', None),
+                'cpu_time_total_us': getattr(event, 'cpu_time_total', None),
+                'self_cuda_time_total_us': getattr(event, 'self_cuda_time_total', None),
+                'cuda_time_total_us': getattr(event, 'cuda_time_total', None),
+                'cpu_memory_usage_bytes': getattr(event, 'cpu_memory_usage', None),
+                'self_cpu_memory_usage_bytes': getattr(event, 'self_cpu_memory_usage', None),
+                'cuda_memory_usage_bytes': getattr(event, 'cuda_memory_usage', None),
+                'self_cuda_memory_usage_bytes': getattr(event, 'self_cuda_memory_usage', None),
+                'flops': getattr(event, 'flops', None),
+                'count': getattr(event, 'count', None),
+                'input_shapes': str(getattr(event, 'input_shapes', None)),
+            })
+        df = pd.DataFrame(rows).sort_values(
+            by='self_cpu_time_total_us',
+            ascending=False,
+            na_position='last'
+        ).head(PROFILER_SUMMARY_MAX_ROWS)
         df.to_csv(f'./result/{opt.exp_name}/profile_summary.csv', index=False)
 
+    if device == 'cuda':
+        peak_allocated_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+        peak_reserved_mb = torch.cuda.max_memory_reserved() / (1024 ** 2)
+    profile_metadata = {
+        'activities': [activity.name for activity in PROFILER_ACTIVITIES_LIST],
+        'schedule': {
+            'wait': PROFILER_WAIT_STEPS,
+            'warmup': PROFILER_WARMUP_STEPS,
+            'active': PROFILER_ACTIVE_STEPS,
+            'repeat': PROFILER_REPEAT_CYCLES,
+        },
+        'record_shapes': True,
+        'profile_memory': True,
+        'with_flops': True,
+        'notes': [
+            'Profiler step is advanced once per evaluation batch.',
+            'FLOP counts from torch.profiler are estimates and only include supported operators.',
+            'Peak CUDA memory reflects inference memory in no_grad mode, not training-time activation memory.',
+        ],
+    }
+    if peak_allocated_mb is not None:
+        profile_metadata['peak_cuda_memory_allocated_mb'] = round(peak_allocated_mb, 3)
+        profile_metadata['peak_cuda_memory_reserved_mb'] = round(peak_reserved_mb, 3)
+    with open(f'./result/{opt.exp_name}/profile_metadata.json', 'w') as metadata_file:
+        json.dump(profile_metadata, metadata_file, indent=2)
 
     accuracy = n_correct / float(length_of_data) * 100
     norm_ED = norm_ED / float(length_of_data)  # ICDAR2019 Normalized Edit Distance
