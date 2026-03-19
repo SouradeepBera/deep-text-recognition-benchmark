@@ -19,9 +19,9 @@ from dataset import hierarchical_dataset, AlignCollate
 from model import Model
 
 PROFILER_ACTIVITIES_LIST = [ProfilerActivity.CPU]
-PROFILER_WAIT_STEPS = 5
-PROFILER_WARMUP_STEPS = 20
-PROFILER_ACTIVE_STEPS = 50
+PROFILER_WAIT_STEPS = 10
+PROFILER_WARMUP_STEPS = 5
+PROFILER_ACTIVE_STEPS = 10
 PROFILER_REPEAT_CYCLES = 1
 
 device = 'cpu'
