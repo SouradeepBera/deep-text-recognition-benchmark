@@ -30,11 +30,6 @@ if torch.cuda.is_available():
     PROFILER_ACTIVITIES_LIST += [ProfilerActivity.CUDA]
 
 
-def _synchronize_if_needed():
-    if device == 'cuda':
-        torch.cuda.synchronize()
-
-
 def benchmark_all_eval(model, criterion, converter, opt, calculate_infer_time=False):
     """ evaluation with 10 benchmark evaluation datasets """
     # The evaluation datasets, dataset order is same with Table 1 in our paper.
@@ -128,11 +123,9 @@ def validation(model, criterion, evaluation_loader, converter, opt):
 
             text_for_loss, length_for_loss = converter.encode(labels, batch_max_length=opt.batch_max_length)
 
-            _synchronize_if_needed()
             start_time = time.time()
             if 'CTC' in opt.Prediction:
                 preds = model(image, text_for_pred)
-                _synchronize_if_needed()
                 forward_time = time.time() - start_time
 
                 # Calculate evaluation loss for CTC deocder.
@@ -153,7 +146,6 @@ def validation(model, criterion, evaluation_loader, converter, opt):
             
             else:
                 preds = model(image, text_for_pred, is_train=False)
-                _synchronize_if_needed()
                 forward_time = time.time() - start_time
 
                 preds = preds[:, :text_for_loss.shape[1] - 1, :]
@@ -272,6 +264,7 @@ def validation(model, criterion, evaluation_loader, converter, opt):
     accuracy = n_correct / float(length_of_data) * 100
     norm_ED = norm_ED / float(length_of_data)  # ICDAR2019 Normalized Edit Distance
 
+    print("infer time: ", infer_time)
     return valid_loss_avg.val(), accuracy, norm_ED, preds_str, confidence_score_list, labels, infer_time, length_of_data, prof
 
 
@@ -293,14 +286,14 @@ def test(opt):
     print('training on device', device)
 
     # load model
-    print('loading pretrained model from %s' % opt.saved_model)
-    model.load_state_dict(torch.load(opt.saved_model, map_location=device))
-    opt.exp_name = '_'.join(opt.saved_model.split('/')[1:])
+    # print('loading pretrained model from %s' % opt.saved_model)
+    # model.load_state_dict(torch.load(opt.saved_model, map_location=device))
+    opt.exp_name = '_'.join(f'/resnet_lstm_attn'.split('/')[1:])
     # print(model)
 
     """ keep evaluation model and result logs """
     os.makedirs(f'./result/{opt.exp_name}', exist_ok=True)
-    os.system(f'cp {opt.saved_model} ./result/{opt.exp_name}/')
+    # os.system(f'cp {opt.saved_model} ./result/{opt.exp_name}/')
 
     """ setup loss """
     if 'CTC' in opt.Prediction:
@@ -336,7 +329,7 @@ if __name__ == '__main__':
     parser.add_argument('--benchmark_all_eval', action='store_true', help='evaluate 10 benchmark evaluation datasets')
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
     parser.add_argument('--batch_size', type=int, default=192, help='input batch size')
-    parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
+    # parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
     """ Data processing """
     parser.add_argument('--batch_max_length', type=int, default=25, help='maximum-label-length')
     parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
